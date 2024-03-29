@@ -4,11 +4,12 @@ This is a browser based DOS emulator designed around ease of use and stability. 
 Supports the following features -
 - Fully web based application - using web assembly
 - Save hard drive to the browser (512mb, 1 gig, or 2 gig options)
-- Automatic support for a variety of file formats (Iso, Zip, Bin, Cue, Img)
+- Automatic support for a variety of file formats (Iso, Zip, Bin, Cue, Img, 7z)
 - Customize RAM (32mb, 64mb, 128mb)
 - Import/export files into and out of the emulator
 - Export your entire hard disk image for local saving
 - Load/change CD while emulator is running
+- Floppy Disk Support
 - Audio support
 - Full screen
 - Zoom controls
@@ -57,16 +58,6 @@ You can host the app on your own web server. Copy everything in the `dist\` fold
 
 Also you can optionally configure a Default Hard Drive to load when users navigate to your application. After Saving/Configuring a Hard Drive locally you can export it from the advanced menu.
 
-## Docker
-
-If you wish to run the tutorial, you can use the following command after installing Docker Desktop:
-
-```bash
-docker run -d -p 80:80 omarstewey/neilsdoswasmx
-```
-
-Once it has started, you can open your browser to [http://localhost](http://localhost).
-
 ![exportdrive](screenshots/exportdrive.PNG)
 
 Then update the settings.js file with the path to your img file
@@ -80,6 +71,20 @@ var DOSWASMSETTINGS = {
 }
 
 ```
+
+# Docker
+
+If you wish to run directly in a container, you can use the following command after installing Docker Desktop:
+
+```bash
+docker run -d -p 80:80 nbarkhina/doswasmx
+```
+
+Once it has started, you can open your browser to [http://localhost](http://localhost).
+
+# Online Documentation
+
+For more extensive guides and technical information please refer to our [Online Documentation](https://nbarkhina.github.io/DosWasmX/)
 
 # Screenshots
 

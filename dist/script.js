@@ -11,6 +11,8 @@ class MyClass {
     constructor() {
         this.rom_name = '';
         this.rom_size = 0;
+        this.mobileMode = false;
+        this.iosMode = false;
         this.base_name = '';
         this.initCount = 0;
         this.baseImageSaved = false;
@@ -19,9 +21,11 @@ class MyClass {
         this.exportFilesRequested = false;
         this.lblError = '';
         this.isoMounted = false;
+        this.floppyMounted = false;
         this.canvasHeight = 480;
         this.ram = 32;
         this.initialHardDrive = 'hd_520';
+        this.dosVersion = '7.1';
         this.iso_loaded = false;
         this.noIso = false;
         this.importedFileNames = [];
@@ -56,6 +60,9 @@ class MyClass {
         this.loadSavestateAfterBoot = false;
         this.noCopyImport = false;
         this.changeCD = false;
+        this.changeFloppy = false;
+        this.loadFloppy = false;
+        this.isDosMode = true;
         this.autoKeyboard = false;
         this.autoKeyboardTimer = 0;
         this.autoKeyboardInterval = 48*180; //three minutes (audioprocessrecurring gets called 48 times a second)
@@ -66,9 +73,11 @@ class MyClass {
         this.then = Date.now();
         this.hasCloud = false;
         this.initialInstallation = false;
+        this.hardDiskFallbackFromFloppy = false;
         this.ranWindowsSetup = false;
         this.win95InstallationFix = false;
         this.winNotFoundCommands = '';
+        this.doswasmxBatFound = false;
         this.romList = [];
         this.settings = {
             CLOUDSAVEURL: "",
@@ -77,6 +86,7 @@ class MyClass {
         };
         this.specialFileHandlers = 
         [
+            '.7z',
             '.zip',
             '.bin',
             '.cue',
@@ -119,6 +129,7 @@ class MyClass {
         rivets.bind(document.getElementById('settingsModal'), { data: this });
         rivets.bind(document.getElementById('divInstructions'), { data: this });
         
+        this.detectBrowser();
         this.setupDragDropRom();
         this.createDB();
         this.retrieveSettings();
@@ -132,6 +143,40 @@ class MyClass {
         $('#topPanel').show();
         $('#errorOuter').show();
         
+    }
+
+    detectBrowser(){
+        if (navigator.userAgent.toLocaleLowerCase().includes('iphone'))
+        {
+            this.iosMode = true;
+            try {
+                let iosVersion = navigator.userAgent.substring(navigator.userAgent.indexOf("iPhone OS ") + 10);
+                iosVersion = iosVersion.substring(0, iosVersion.indexOf(' '));
+                iosVersion = iosVersion.substring(0, iosVersion.indexOf('_'));
+                this.iosVersion = parseInt(iosVersion);
+            } catch (err) { }
+        }
+        if (window.innerWidth < 600 || this.iosMode)
+            this.mobileMode = true;
+        else
+            this.mobileMode = false;
+
+        // firefox only supports 250 megs??
+        if (navigator.userAgent.toLocaleLowerCase().includes('firefox'))
+        {
+            this.initialHardDrive = 'hd_250';
+        }
+
+        if (this.iosMode)
+        {
+            this.initialHardDrive = 'hd -size 25';
+        }
+
+        if (this.mobileMode)
+        {
+            this.canvasHeight = window.innerWidth / 2;
+            console.log('detected mobile mode - canvasheight: ' + this.canvasHeight)
+        }
     }
 
     //DRAG AND DROP ROM
@@ -226,8 +271,9 @@ class MyClass {
             console.log('size found');
             let sizeNum = parseInt(size);
             this.canvasHeight = sizeNum;
-            this.resizeCanvas();
         }
+
+        this.resizeCanvas();
 
         $('#canvasDiv').show();
         $('#divInstructions').show();
@@ -236,6 +282,57 @@ class MyClass {
 
     processPrintStatement(text) {
         console.log(text);
+
+        //they tried to load an .img file that turned out to be a floppy disk
+        if (text.includes('detected floppy disk'))
+        {
+            if (this.dblistDisks.length == 0 && !this.settings.DEFAULTIMG)
+            {
+                //this means they don't have a hard disk
+                myClass.base_name = 'mydisk';
+                myClass.initialInstallation = true;
+            }
+            else
+            {
+                //fall back to using their hard drive
+                myClass.base_name = 'mydisk';
+                myClass.hardDiskFallbackFromFloppy = true;
+            }
+        }
+
+        //we detected a floppy disk
+        if (text.includes('floppy disk mounted'))
+        {
+            setTimeout(() => {
+                if (myClass.initialInstallation)
+                {
+                    myClass.sendDosCommands(
+                        'imgmake \"' + this.base_name + ".img\" -t " + this.initialHardDrive + "\n" +
+                        'imgmount c \"' + this.base_name + ".img\na:\n");
+                }
+                else if (myClass.hardDiskFallbackFromFloppy)
+                {
+                    //if they already have a hard disk we load it
+                    //currently does not support this.settings.DEFAULTIMG + dragging .img floppy
+                    if (this.dblistDisks.length > 0)
+                    {
+                        this.loadFromDatabase(SaveTypes.Disk);
+                    }
+                }
+                else
+                {
+                    myClass.sendDosCommands("a:\n");
+                }
+                myClass.floppyMounted = true;
+            }, 
+            
+            //TODO this is a hack
+            //dos commands should queue up rather
+            //than overwrite eachother
+            500);
+        }
+
+
 
         //this means we detected the windows cd
         if (text.includes("iso mounted root file: WIN98") || text.includes("iso mounted root file: WIN95"))
@@ -251,12 +348,25 @@ class MyClass {
             }
         }
 
-        if (text.includes('windows not found'))
+        if (text.includes('windows not found') || text.includes('found noboot.txt'))
         {
             //if we don't detect a windows installation just send
             //them to the C drive
             setTimeout(() => {
-                myClass.sendDosCommands("c:\n" + myClass.winNotFoundCommands);
+
+                let dosCommands = "c:\n";
+
+                //if we found a DOSWASMX.BAT we run it
+                if (myClass.doswasmxBatFound)
+                {
+                    dosCommands += 'doswasmx.bat\n'
+                }
+
+                //add any additional commands appended based on the rom file
+                dosCommands += myClass.winNotFoundCommands;
+
+                //send it to the dos shell
+                myClass.sendDosCommands(dosCommands);
 
                 //clear it for next time
                 myClass.winNotFoundCommands = '';
@@ -296,11 +406,17 @@ class MyClass {
             }
         }
 
+        if (text.includes('drive mounted C file: DOSWASMX.BAT'))
+        {
+            myClass.doswasmxBatFound = true;
+        }
+
         if (text.includes('x =='))
         {
             if (text.includes('x == 2'))
             {
                 //this means we are booting into windows
+                myClass.isDosMode = false;
             }            
             else
             {
@@ -327,6 +443,8 @@ class MyClass {
 
                 //we are back to the dos shell
                 myClass.isoMounted = false;
+                myClass.floppyMounted = false;
+                myClass.isDosMode = true;
             }
         }
 
@@ -680,7 +798,8 @@ class MyClass {
 
 
         //write dosbox.conf
-        let file = './dosbox-x-for-web.conf';
+        var rando = Math.floor(Math.random() * Math.floor(100000));
+        let file = './dosbox-x-for-web.conf?v=' + rando;
         responseText = await $.ajax({
             url: './' + file,
             beforeSend: function (xhr) {
@@ -712,7 +831,7 @@ class MyClass {
                     '[autoexec]\r\nimgmount d \"' + this.rom_name +
                     '\"\r\nECHO Initial Install\r\n' + 
                     'imgmake \"' + this.base_name + ".img\" -t " + this.initialHardDrive + "\r\n" +
-                    'imgmount c \"' + this.base_name + ".img\r\nd:\r\n");
+                    'imgmount c \"' + this.base_name + ".img\"\r\nd:\r\n");
             }
             else if (this.hasBinCue)
             {
@@ -720,7 +839,7 @@ class MyClass {
                     '[autoexec]\r\nimgmount d \"' + this.cueFile + '\"\r\n' +
                     '\"\r\nECHO Initial Install\r\n' + 
                     'imgmake \"' + this.base_name + ".img\" -t " + this.initialHardDrive + "\r\n" +
-                    'imgmount c \"' + this.base_name + ".img\r\nd:\r\n");
+                    'imgmount c \"' + this.base_name + ".img\"\r\nd:\r\n");
             }
             else if (this.rom_name.toLocaleLowerCase().endsWith('.img'))
             {
@@ -729,7 +848,8 @@ class MyClass {
                     'c:\r\n' +
                     'boot c:');
             }
-            else if (this.rom_name.toLocaleLowerCase().endsWith('.zip'))
+            else if (this.rom_name.toLocaleLowerCase().endsWith('.zip') ||
+                     this.rom_name.toLocaleLowerCase().endsWith('.7z'))
             {
                 let sanitized = this.sanitizeName(this.rom_name);
 
@@ -738,7 +858,7 @@ class MyClass {
                 responseText = responseText.replace('[autoexec]',
                     '[autoexec]\r\nmount d \"' + this.rom_name + '\"\r\n' +
                     'imgmake \"' + this.base_name + ".img\" -t " + this.initialHardDrive + "\r\n" +
-                    'imgmount c \"' + this.base_name + ".img\r\n" +
+                    'imgmount c \"' + this.base_name + ".img\"\r\n" +
                     'XCOPY D:\ C:\\' + sanitized + ' /I /E\r\nmount -u d\r\n' +
                     'c:\r\ncd ' + sanitized + '\r\n');
             }
@@ -769,7 +889,8 @@ class MyClass {
                 '.img\"\r\nimgmount d \"' + this.base_name +
                 '.iso\"\r\n' + multiFileScript + 'boot c:');
         }
-        else if (this.rom_name.toLocaleLowerCase().endsWith('.zip'))
+        else if (this.rom_name.toLocaleLowerCase().endsWith('.zip') || 
+                 this.rom_name.toLocaleLowerCase().endsWith('.7z'))
         {
             let sanitized = this.sanitizeName(this.rom_name);
 
@@ -798,6 +919,9 @@ class MyClass {
 
         //ram override
         responseText = responseText.replace("memsize=32","memsize=" + this.ram);
+
+        //dos version override
+        responseText = responseText.replace("ver=7.1","ver=" + this.dosVersion);
         
         console.log(responseText);
         FS.writeFile('/dosbox-x.conf',responseText);
@@ -812,6 +936,8 @@ class MyClass {
         this.sendKey = Module.cwrap('neil_send_key', null, ['number']);
         this.updateCpuNeil = Module.cwrap('neil_update_cpu', null, ['string']);
         this.changeIso = Module.cwrap('neil_change_iso', null, ['string']);
+        this.changeFloppyDisk = Module.cwrap('neil_change_floppy', null, ['string']);
+        this.loadFloppyDisk = Module.cwrap('neil_load_floppy', null, ['string']);
         this.sendDosCommands = Module.cwrap('neil_send_dos_commands', null, ['string']);
     }
 
@@ -881,7 +1007,6 @@ class MyClass {
         else
         {
             let romurl = this.readRomProp("value");
-            let skipIso = this.readRomProp("skipiso")
             let ram = this.readRomProp("ram");
             this.rom_name = this.extractRomName(romurl);
             if (ram)
@@ -894,15 +1019,7 @@ class MyClass {
             }
             this.extractBaseName();
 
-            if (skipIso)
-            {
-                this.noIso = true;
-                this.LoadEmulator();
-            }
-            else
-            {
-                this.load_file(romurl);
-            }
+            this.load_file(romurl);
         }
     }
 
@@ -1150,7 +1267,7 @@ class MyClass {
     }
 
     resizeCanvas(){
-        document.getElementById('canvasDiv').style.height = + this.canvasHeight + 'px';
+        document.getElementById('canvasDiv').style.height = this.canvasHeight + 'px';
     }
 
     saveDrive()
@@ -1190,14 +1307,17 @@ class MyClass {
     retrieveSettings(){
         this.readFromLocalStorage('doswasmx-ram','ram');
         this.readFromLocalStorage('doswasmx-initialhd','initialHardDrive');
+        this.readFromLocalStorage('doswasmx-dosversion','dosVersion');
     }
 
     saveOptions(){
         this.ram = this.ramTemp;
         this.initialHardDrive = this.initialHardDriveTemp;
+        this.dosVersion = this.dosVersionTemp;
 
         this.writeToLocalStorage('doswasmx-ram','ram');
         this.writeToLocalStorage('doswasmx-initialhd','initialHardDrive');
+        this.writeToLocalStorage('doswasmx-dosversion','dosVersion');
     }
 
     createDB() {
@@ -1326,6 +1446,7 @@ class MyClass {
                 }
             };
             addRequest.onerror = function (event) {
+                toastr.error('Error Saving Data');
                 console.log('error adding data');
                 console.log(event);
             };
@@ -1403,7 +1524,14 @@ class MyClass {
                 }
                 if (saveType == SaveTypes.Disk)
                 {
-                    if (!myClass.loggedIn)
+                    if (myClass.hardDiskFallbackFromFloppy)
+                    {
+                        let byteArray = rom.result; //Uint8Array
+                        let imgName = '/' + myClass.base_name + '.img';
+                        FS.writeFile(imgName,byteArray);
+                        myClass.sendDosCommands('imgmount c \"' + myClass.base_name + ".img\na:\n");
+                    }
+                    else if (!myClass.loggedIn)
                     {
                         let byteArray = rom.result; //Uint8Array
                         let imgName = '/' + myClass.base_name + '.img';
@@ -1510,7 +1638,8 @@ class MyClass {
 
         this.ramTemp = this.ram;
         this.initialHardDriveTemp = this.initialHardDrive;
-
+        this.dosVersionTemp = this.dosVersion;
+        
         $("#settingsModal").modal();
     }
 
@@ -1524,6 +1653,8 @@ class MyClass {
         myClass.noCopyImport = false;
         myClass.changeCD = false;
         myClass.loadCD = false;
+        myClass.changeFloppy = false;
+        myClass.loadFloppy = false;
         if (importType == 'noCopy')
         {
             myClass.noCopyImport = true;
@@ -1531,6 +1662,14 @@ class MyClass {
         if (importType == 'changeCD')
         {
             myClass.changeCD = true;
+        }
+        if (importType == 'changeFloppy')
+        {
+            myClass.changeFloppy = true;
+        }
+        if (importType == 'loadFloppy')
+        {
+            myClass.loadFloppy = true;
         }
         if (importType == 'loadCD')
         {
@@ -1964,7 +2103,7 @@ class MyClass {
         reader.onload = function (e) {
             var byteArray = new Uint8Array(this.result);
 
-            if (myClass.noCopyImport || myClass.isSpecialHandler)
+            if (myClass.noCopyImport || myClass.isSpecialHandler || myClass.changeFloppy || myClass.loadFloppy)
             {
                 FS.writeFile('/' + file.name, byteArray);
             }
@@ -1983,6 +2122,18 @@ class MyClass {
                 if (myClass.noCopyImport)
                 {
                     Module._neil_exit_to_dos();
+                }
+                else if (myClass.changeFloppy)
+                {
+                    let filename = myClass.importedFileNames[0];
+                    toastr.info('changing floppy ' + filename);
+                    myClass.changeFloppyDisk(filename);
+                }
+                else if (myClass.loadFloppy)
+                {
+                    let filename = myClass.importedFileNames[0];
+                    toastr.info('loading floppy ' + filename);
+                    myClass.loadFloppyDisk(filename);
                 }
                 else if (myClass.changeCD)
                 {
@@ -2013,7 +2164,8 @@ class MyClass {
                         for(let i = 0; i < myClass.importedFileNames.length; i++)
                         {
                             let filename = myClass.importedFileNames[i];
-                            if (filename.toLocaleLowerCase().endsWith('.zip'))
+                            if (filename.toLocaleLowerCase().endsWith('.zip') ||
+                                filename.toLocaleLowerCase().endsWith('.7z'))
                             {
                                 //long folder names break with xcopy
                                 let importFolder = myClass.sanitizeName(filename);
